@@ -486,7 +486,18 @@ func restarted(renews, restart time.Time) time.Time {
 }
 
 func (l Limit) applies(model string) bool {
-	return (l.Model == "" || strings.Contains(model, l.Model)) && (l.matches == nil || l.matches(model))
+	return limitModelApplies(l.Model, model) && (l.matches == nil || l.matches(model))
+}
+
+// limitModelApplies says whether a window scoped to scope counts model (both
+// lower case): empty scope counts every model, a substring match counts models
+// naming it, and Anthropic's Fable pool ("fable", seven_day_overage_included /
+// "7 days · Fable") counts Mythos models alongside Fable.
+func limitModelApplies(scope, model string) bool {
+	if scope == "" || strings.Contains(model, scope) {
+		return true
+	}
+	return scope == "fable" && claudeFamilyInPool(claudeModelFamily(model), "fable")
 }
 
 // For is what an allowance leaves a request for model at now: the share

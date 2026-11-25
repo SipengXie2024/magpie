@@ -207,3 +207,40 @@ func TestClaudeFamilyOutFullForThatFamily(t *testing.T) {
 		t.Fatalf("a Codex account full till %v", got)
 	}
 }
+
+// Mythos hitting "You've hit your Fable limit" keeps the account out for the
+// Fable/Mythos pool only, never the whole account, so Opus stays available.
+func TestClaudeMythosFableLimitNotWholeAccountOut(t *testing.T) {
+	fresh(t)
+	s := &Server{}
+	const user = "mythos-out@example.com"
+	acct := func(model string) candidate {
+		return candidate{p: provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: user}}, model: model, rest: "claude"}
+	}
+	mythos := acct("claude-mythos-5-1")
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Claude Code: You've hit your Fable limit · resets Nov 29, 4pm (UTC)"}}`)
+	r := s.restAfter(mythos, http.StatusTooManyRequests, http.Header{}, body)
+	if r.Key != mythos.restID() {
+		t.Fatalf("Mythos Fable limit rested %+v, want model rest", r)
+	}
+	if until, _, _ := keptOut(t, user); !until.IsZero() {
+		t.Fatalf("Mythos Fable limit held the whole account out till %v", until)
+	}
+	now := time.Now()
+	for _, m := range []string{"claude-mythos-5-1", "claude-fable-5-1"} {
+		if got := provider.ClaudeModelOutUntil(user, m, now); !got.Equal(r.Until) {
+			t.Fatalf("%s ClaudeModelOutUntil=%v, want %v", m, got, r.Until)
+		}
+		if got := acct(m).full(now); !got.Equal(r.Until) {
+			t.Fatalf("%s full=%v, want %v", m, got, r.Until)
+		}
+	}
+	for _, m := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"} {
+		if got := provider.ClaudeModelOutUntil(user, m, now); !got.IsZero() {
+			t.Fatalf("%s ClaudeModelOutUntil=%v, want zero", m, got)
+		}
+		if got := acct(m).full(now); !got.IsZero() {
+			t.Fatalf("%s full=%v, want zero", m, got)
+		}
+	}
+}

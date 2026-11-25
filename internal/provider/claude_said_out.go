@@ -47,7 +47,15 @@ func (s claudeSaid) out(family string, now time.Time) bool {
 	if s.Until.After(now) {
 		return true
 	}
-	return family != "" && s.Models[family].Until.After(now)
+	if family == "" {
+		return false
+	}
+	for limitFam, e := range s.Models {
+		if claudeFamilyInPool(family, limitFam) && e.Until.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // claudeFamilies is the model families Anthropic gives a limit of their
@@ -56,8 +64,12 @@ var claudeFamilies = lazyre.New(`(?i)(opus|sonnet|haiku|fable|mythos)`)
 
 // claudeModelFamily is the family of a Claude model id or alias
 // ("claude-fable-5-2[1m]", "fable", "opusplan"): fable, opus, sonnet,
-// haiku or mythos; empty for none of them ("default", "<synthetic>").
+// haiku or mythos; empty for none of them ("default", "<synthetic>", or
+// magpie's Claude Desktop compatibility alias "mythos-magpie-<n>").
 func claudeModelFamily(model string) string {
+	if strings.Contains(strings.ToLower(model), "mythos-magpie-") {
+		return ""
+	}
 	if m := claudeFamilies.FindStringSubmatch(model); m != nil {
 		return strings.ToLower(m[1])
 	}
@@ -66,6 +78,20 @@ func claudeModelFamily(model string) string {
 
 // ClaudeModelFamily is claudeModelFamily, for the gateway.
 func ClaudeModelFamily(model string) string { return claudeModelFamily(model) }
+
+// claudeFamilyInPool says whether a model of modelFamily draws on a limit
+// scoped to limitFamily: the same family, or a Mythos model drawing on
+// Anthropic's Fable pool ("7 days · Fable" / seven_day_overage_included).
+func claudeFamilyInPool(modelFamily, limitFamily string) bool {
+	return modelFamily != "" && (modelFamily == limitFamily || modelFamily == "mythos" && limitFamily == "fable")
+}
+
+// ClaudeModelInLimitFamily says whether a Claude model id draws on a
+// model-scoped limit for limitFamily (e.g. "fable" covers both claude-fable-*
+// and claude-mythos-*).
+func ClaudeModelInLimitFamily(model, limitFamily string) bool {
+	return claudeFamilyInPool(claudeModelFamily(model), strings.ToLower(limitFamily))
+}
 
 // claudeFamilyLimitSaid is Claude Code naming one family's limit: "You've
 // hit your Fable limit · resets …", "… Opus limit", "You've reached your
@@ -262,7 +288,7 @@ func clearClaudeSaid(user string, ws []QuotaWindow) {
 		}
 		read, full := false, false
 		for _, w := range ws {
-			if w.Model != "" && claudeModelFamily(w.Model) == f {
+			if w.Model != "" && claudeFamilyInPool(f, claudeModelFamily(w.Model)) {
 				read = true
 				full = full || w.Used >= 100 && !resetPassed(w, now)
 			}
@@ -359,10 +385,13 @@ func ClaudeModelOutUntil(user, model string, now time.Time) time.Time {
 			c.m, c.mod, c.n = claudeSaidNow(), fi.ModTime(), fi.Size()
 		}
 	}
-	if t := c.m[strings.ToLower(user)].Models[family].Until; t.After(now) {
-		return t
+	var out time.Time
+	for limitFam, e := range c.m[strings.ToLower(user)].Models {
+		if claudeFamilyInPool(family, limitFam) && e.Until.After(now) && e.Until.After(out) {
+			out = e.Until
+		}
 	}
-	return time.Time{}
+	return out
 }
 
 // claudeStaleDefault is the shortest window a Claude account has (its 5
@@ -424,7 +453,12 @@ func NoteClaudeOut(user string, until time.Time, said string, named bool) {
 // out for that family alone, so the switch passes over it as a spare for
 // Claude Code on that family only.
 func NoteClaudeModelOut(user, model string, until time.Time, said string, named bool) {
-	if family := claudeModelFamily(model); family != "" {
+	modelFam := claudeModelFamily(model)
+	family := claudeLimitFamily("", said)
+	if family == "" || !claudeFamilyInPool(modelFam, family) {
+		family = modelFam
+	}
+	if family != "" {
 		noteClaudeOutFor(user, family, until, said, named)
 	}
 }

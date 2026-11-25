@@ -515,5 +515,8 @@ func claudeOutUnread(user string, fams []string, known bool, q SubscriptionQuota
 // claudeFamilyStops says a limit of family (empty: the whole account's)
 // stops Claude Code on the families fams (nil: not known, so it does).
 func claudeFamilyStops(family string, fams []string) bool {
-	return family == "" || fams == nil || slices.Contains(fams, family)
+	if family == "" || fams == nil {
+		return true
+	}
+	return slices.ContainsFunc(fams, func(f string) bool { return claudeFamilyInPool(f, family) })
 }

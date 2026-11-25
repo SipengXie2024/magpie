@@ -46,3 +46,35 @@ func TestClaudeNamedModelLimitRestsThatModelOnly(t *testing.T) {
 		t.Fatalf("Sonnet's limit rested Opus as %+v, want the account", r)
 	}
 }
+
+// Mythos draws on Anthropic's Fable limit pool: a 429 on claude-mythos-5-1
+// naming the Fable limit rests that model alone (and writes a model-scoped
+// limit notice), leaving Opus, Sonnet and Haiku un-rested on the account.
+func TestClaudeMythosFableLimitRestsMythosOnly(t *testing.T) {
+	fresh(t)
+	const user = "mythos@example.com"
+	acct := func(model string) candidate {
+		return candidate{p: provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: user}}, model: model, rest: "claude"}
+	}
+	s := &Server{}
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Claude Code: You've hit your Fable limit · resets Nov 29, 4pm (UTC)"}}`)
+	mythos := acct("claude-mythos-5-1")
+	r := s.restAfter(mythos, http.StatusTooManyRequests, http.Header{}, body)
+	if r.Why != failQuota || r.Model != "claude-mythos-5-1" || r.Key != mythos.restID() {
+		t.Fatalf("rest: %+v, want model rest %q", r, mythos.restID())
+	}
+	if _, ok := restOf(mythos.restKey()); ok {
+		t.Fatal("Fable limit on Mythos rested the whole account")
+	}
+	if n, ok := LimitNoticeOf(mythos.restKey()); ok {
+		t.Fatalf("Fable limit on Mythos wrote account-level notice: %+v", n)
+	}
+	if n, ok := LimitNoticeOf(mythos.restID()); !ok || n.Model != "claude-mythos-5-1" {
+		t.Fatalf("expected model-level limit notice for Mythos, got %+v ok=%v", n, ok)
+	}
+	for _, m := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"} {
+		if got, ok := restingOf(acct(m)); ok {
+			t.Fatalf("%s rests (%+v) on an account whose Fable limit was hit by Mythos", m, got)
+		}
+	}
+}

@@ -279,3 +279,67 @@ func TestClaudeOnFamiliesFromSettings(t *testing.T) {
 		t.Fatalf("a reply on Fable read: %v", fams)
 	}
 }
+
+// Mythos models draw on Anthropic's Fable pool: a Fable limit recorded for
+// claude-mythos-5-1 keeps the account out for Mythos and Fable alone, leaves
+// Opus/Sonnet/Haiku in, and clears when the Fable window has room again.
+func TestClaudeFableLimitCoversMythosNotOpus(t *testing.T) {
+	claudeThree(t)
+	for _, tc := range []struct {
+		model, limitFam string
+		want            bool
+	}{
+		{"claude-mythos-5-1", "fable", true},
+		{"claude-mythos-5-1[1m]", "fable", true},
+		{"claude-fable-5-1", "fable", true},
+		{"claude-mythos-5-1", "mythos", true},
+		{"claude-opus-5-5", "fable", false},
+		{"claude-sonnet-5-5", "fable", false},
+		{"claude-haiku-4-5", "fable", false},
+		{"claude-opus-5-5", "sonnet", false},
+		{"mythos-magpie-1", "fable", false},
+	} {
+		if got := ClaudeModelInLimitFamily(tc.model, tc.limitFam); got != tc.want {
+			t.Errorf("ClaudeModelInLimitFamily(%q, %q) = %v, want %v", tc.model, tc.limitFam, got, tc.want)
+		}
+	}
+
+	now := time.Now()
+	until := now.Add(48 * time.Hour).UTC().Truncate(time.Second)
+	NoteClaudeModelOut("ultra@x.com", "claude-mythos-5-1", until, "Claude Code: You've hit your Fable limit · resets Nov 29, 4pm (UTC)", true)
+	saved := claudeSaidNow()["ultra@x.com"]
+	if !saved.Until.IsZero() {
+		t.Fatalf("whole account held out: %+v", saved)
+	}
+	if !saved.Models["fable"].Until.Equal(until) {
+		t.Fatalf("expected fable pool entry till %v, got %+v", until, saved.Models)
+	}
+	for _, m := range []string{"claude-mythos-5-1", "claude-mythos-5-1[1m]", "claude-fable-5-1"} {
+		if got := ClaudeModelOutUntil("ultra@x.com", m, now); !got.Equal(until) {
+			t.Fatalf("ClaudeModelOutUntil(%q) = %v, want %v", m, got, until)
+		}
+	}
+	for _, m := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "mythos-magpie-1"} {
+		if got := ClaudeModelOutUntil("ultra@x.com", m, now); !got.IsZero() {
+			t.Fatalf("ClaudeModelOutUntil(%q) = %v, want zero", m, got)
+		}
+	}
+	if !claudeSaidOutFor("ultra@x.com", []string{"mythos"}, now) || claudeSaidOutFor("ultra@x.com", []string{"opus"}, now) {
+		t.Fatal("claudeSaidOutFor mismatch for mythos vs opus")
+	}
+	if !claudeFamilyStops("fable", []string{"mythos"}) || claudeFamilyStops("fable", []string{"opus"}) {
+		t.Fatal("claudeFamilyStops mismatch for fable limit")
+	}
+
+	// A direct mythos-keyed entry is also cleared once the Fable window has room.
+	keepClaudeOutFor("ultra@x.com", "mythos", until, "You've hit your limit", now)
+	r := until
+	clearClaudeSaid("ultra@x.com", []QuotaWindow{{Name: "7 days", Used: 54}, {Name: "7 days · Fable", Used: 100, ResetsAt: &r, Model: "fable"}})
+	if !claudeSaidOutFor("ultra@x.com", []string{"mythos"}, now) {
+		t.Fatal("full Fable window cleared mythos limit")
+	}
+	clearClaudeSaid("ultra@x.com", []QuotaWindow{{Name: "7 days", Used: 54}, {Name: "7 days · Fable", Used: 10, ResetsAt: &r, Model: "fable"}})
+	if claudeSaidOutFor("ultra@x.com", []string{"mythos"}, now) || claudeSaidOutFor("ultra@x.com", []string{"fable"}, now) {
+		t.Fatal("non-full Fable window failed to clear fable/mythos limits")
+	}
+}

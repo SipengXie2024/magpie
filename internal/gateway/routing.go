@@ -2158,10 +2158,11 @@ func modelNamed(c candidate, why string, body []byte) bool {
 // claudeFamilyLimit says a Claude account's refusal is its own limit for
 // the family of model, as Claude Code words it: "You've reached your Fable
 // limit. Run /usage-credits to continue or switch models with /model"
-// (YsiCing on X: Opus was refused with it, its quota left). The family is
-// the word between "your" and "limit", found in the model's id. The
-// account-wide windows say "usage", "session", "weekly", "5-hour"
-// or nothing ("You've hit your limit"), and rest the account.
+// (YsiCing on X: Opus was refused with it, its quota left), including Mythos
+// models drawing on the Fable pool. The family is the word between "your"
+// and "limit", matching the model's id or its limit pool. The account-wide
+// windows say "usage", "session", "weekly", "5-hour" or nothing ("You've hit
+// your limit"), and rest the account.
 func claudeFamilyLimit(c candidate, model string, words []byte) bool {
 	if c.p.Account == nil || c.p.Account.UsageAgent() != "claude" {
 		return false
@@ -2174,7 +2175,7 @@ func claudeFamilyLimit(c candidate, model string, words []byte) bool {
 	case "usage", "session", "weekly", "monthly", "daily", "hourly", "rate", "plan", "message", "credit", "credits", "free", "extra", "overage":
 		return false
 	default:
-		return strings.Contains(model, fam)
+		return strings.Contains(model, fam) || provider.ClaudeModelInLimitFamily(model, fam)
 	}
 }
 

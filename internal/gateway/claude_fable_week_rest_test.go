@@ -65,3 +65,54 @@ func TestClaudeFableWeekRestsFableOnly(t *testing.T) {
 		}
 	}
 }
+
+// Same narrowing for Mythos when the 429 names no family ("You've hit your
+// limit") and the refreshed reading shows seven_day_overage_included full
+// while seven_day still has room.
+func TestClaudeFableWeekRestsMythosOnly(t *testing.T) {
+	old, oldAwait := allowances, awaitAllowance
+	defer func() { allowances, awaitAllowance = old, oldAwait }()
+	defer narrowing.Wait()
+	fresh(t)
+	var mu sync.Mutex
+	read := map[string]provider.Allowance{}
+	allowances = func(string) map[string]provider.Allowance {
+		mu.Lock()
+		defer mu.Unlock()
+		return read
+	}
+	const user = "mythos-week@example.com"
+	five, week := time.Now().Add(2*time.Hour).Unix(), time.Now().Add(4*24*time.Hour).Unix()
+	note := func(fable float64) {
+		mu.Lock()
+		defer mu.Unlock()
+		read = map[string]provider.Allowance{user: provider.ClaudeAllowanceForTest([]provider.ClaudeLimit{
+			{Kind: "five_hour", Used: 0.2, ResetsAt: five},
+			{Kind: "seven_day", Used: 0.54, ResetsAt: week},
+			{Kind: "seven_day_overage_included", Used: fable, ResetsAt: week},
+		}, time.Now())}
+	}
+	note(0.6)
+	awaitAllowance = func(_ context.Context, agent, u string) bool {
+		note(1)
+		return true
+	}
+	acct := func(model string) candidate {
+		return candidate{p: provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: user}}, model: model, rest: "claude"}
+	}
+	s := &Server{}
+	mythos := acct("claude-mythos-5-1")
+	r := s.restAfter(mythos, http.StatusTooManyRequests, http.Header{}, []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"You've hit your limit · resets Nov 29, 4pm (UTC)"}}`))
+	if r.Why != failQuota {
+		t.Fatalf("rest: %+v", r)
+	}
+	narrowing.Wait()
+	if got, ok := restingOf(mythos); !ok || got.Key != mythos.restID() || got.Model != "claude-mythos-5-1" {
+		t.Fatalf("Mythos after the reading: %+v %v, want its own rest", got, ok)
+	}
+	for _, m := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"} {
+		if _, ok := restingOf(acct(m)); ok {
+			t.Fatalf("%s rests on an account whose Fable week is used up", m)
+		}
+	}
+}

@@ -147,3 +147,49 @@ Current week (Sonnet only): 100% used · resets Nov 5 at 8pm (UTC)`, now)
 		t.Fatalf("Sonnet weeks: %+v", got)
 	}
 }
+
+// Mythos models share Anthropic's Fable weekly pool ("7 days · Fable" /
+// seven_day_overage_included): a full Fable week stops Mythos and marks it
+// pooled, while Opus, Sonnet, Haiku and Desktop's mythos-magpie-* alias stay
+// on the account's general week.
+func TestClaudeFableWindowCountsMythos(t *testing.T) {
+	now := time.Date(2026, 11, 25, 2, 55, 0, 0, time.UTC)
+	weekReset := time.Date(2026, 11, 29, 15, 59, 0, 0, time.UTC)
+	fableReset := time.Date(2026, 11, 29, 16, 0, 0, 0, time.UTC)
+	ws := []QuotaWindow{
+		{Name: "7 days", Used: 54, Span: 7 * 24 * time.Hour, ResetsAt: &weekReset},
+		{Name: "7 days · Fable", Used: 100, Span: 7 * 24 * time.Hour, Model: "fable", ResetsAt: &fableReset},
+	}
+	a := allowanceOf(ws, now)
+	for _, m := range []string{"claude-mythos-5-1", "claude-mythos-5-1[1m]", "claude-fable-5-1"} {
+		if used, _ := a.For(m, now); used != 100 {
+			t.Fatalf("%s used=%v, want 100", m, used)
+		}
+		if got := a.Full(m, 100, now); !got.Equal(fableReset) {
+			t.Fatalf("%s full=%v, want %v", m, got, fableReset)
+		}
+		if !a.Scoped(m) {
+			t.Fatalf("%s Scoped=false, want true", m)
+		}
+		if !a.Pooled(m, 100, now) {
+			t.Fatalf("%s Pooled=false, want true", m)
+		}
+		if !ws[1].Counts(m) {
+			t.Fatalf("Fable window Counts(%q)=false, want true", m)
+		}
+	}
+	for _, m := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "mythos-magpie-1"} {
+		if used, _ := a.For(m, now); used != 54 {
+			t.Fatalf("%s used=%v, want 54", m, used)
+		}
+		if got := a.Full(m, 100, now); !got.IsZero() {
+			t.Fatalf("%s full=%v, want zero", m, got)
+		}
+		if a.Scoped(m) {
+			t.Fatalf("%s Scoped=true, want false", m)
+		}
+		if ws[1].Counts(m) {
+			t.Fatalf("Fable window Counts(%q)=true, want false", m)
+		}
+	}
+}
